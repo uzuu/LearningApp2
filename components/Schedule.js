@@ -1,9 +1,22 @@
-﻿import { useMemo, useState } from "react";
-import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { useMemo, useRef, useState } from "react";
+import {
+  FlatList,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const VIEW_MODES = ["day", "week", "month"];
 const WEEK_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const HOUR_HEIGHT = 64;
+const WEEK_HEADER_HEIGHT = 82;
+const HOURS = Array.from({ length: 24 }, (_, index) => index);
+const DAY_COLUMN_WIDTH = 280;
+const WEEK_COLUMN_WIDTH = 126;
+const TIME_GUTTER_WIDTH = 62;
 
 const LIGHT_COLORS = {
   bg: "#f4f8ff",
@@ -17,6 +30,11 @@ const LIGHT_COLORS = {
   monthMuted: "#f1f5fc",
   monthActive: "#dfeaff",
   weekActive: "#e8f0ff",
+  timelineLine: "#d8e3f5",
+  eventBlue: "#4b88ff",
+  eventBlueSoft: "#d8e6ff",
+  eventGreen: "#1f8b4c",
+  eventGreenSoft: "#ddf5e5",
 };
 
 const DARK_COLORS = {
@@ -31,6 +49,11 @@ const DARK_COLORS = {
   monthMuted: "#0f1b2c",
   monthActive: "#1d3350",
   weekActive: "#1d3350",
+  timelineLine: "#28405e",
+  eventBlue: "#4f9bff",
+  eventBlueSoft: "#1b3150",
+  eventGreen: "#33b36b",
+  eventGreenSoft: "#153725",
 };
 
 function normalizeDate(date) {
@@ -58,6 +81,29 @@ function formatHeaderDate(date) {
   });
 }
 
+function formatEnglishEventDate(date) {
+  return `${date.getMonth() + 1}.${date.getDate()}.${date.getFullYear()}`;
+}
+
+function formatTimeRange(timeRange) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(timeRange.startHour)}:${pad(timeRange.startMinute)} - ${pad(
+    timeRange.endHour
+  )}:${pad(timeRange.endMinute)}`;
+}
+
+function formatTimeLabel(hour) {
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${hour12} ${suffix}`;
+}
+
+function formatShortTime(hour, minute) {
+  const suffix = hour >= 12 ? "pm" : "am";
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${hour12}:${String(minute).padStart(2, "0")}${suffix}`;
+}
+
 function getWeekStart(date) {
   const current = normalizeDate(date);
   return addDays(current, -current.getDay());
@@ -77,7 +123,245 @@ function buildMonthCells(anchorDate) {
   });
 }
 
-function ReviewList({ events, styles }) {
+function getEventMinutes(timeRange) {
+  const start = timeRange.startHour * 60 + timeRange.startMinute;
+  const end = timeRange.endHour * 60 + timeRange.endMinute;
+  return {
+    start,
+    end,
+    duration: Math.max(end - start, 30),
+  };
+}
+
+function buildEventStyle(event, columnWidth) {
+  const { start, duration } = getEventMinutes(event.reviewTimeRange);
+  return {
+    top: (start / 60) * HOUR_HEIGHT + 2,
+    left: 4,
+    width: columnWidth - 8,
+    height: Math.max((duration / 60) * HOUR_HEIGHT - 4, 28),
+  };
+}
+
+function TimelineEvent({ event, index, styles, columnWidth, onPress }) {
+  const eventStyle = buildEventStyle(event, columnWidth);
+  const isBlue = event.type !== "english-word";
+
+  return (
+    <Pressable
+      onPress={() => onPress?.(event)}
+      style={[
+        styles.timelineEvent,
+        isBlue ? styles.timelineEventBlue : styles.timelineEventGreen,
+        eventStyle,
+      ]}
+    >
+      <Text style={styles.timelineEventBadge}>
+        {event.type === "english-word" ? "WORD" : "LEARNING"}
+      </Text>
+      <Text
+        numberOfLines={1}
+        style={styles.timelineEventTitle}
+      >
+        {event.title}
+      </Text>
+      <Text style={styles.timelineEventTime}>
+        {event.type === "english-word"
+          ? `Review day +${event.dayOffset}`
+          : `${formatShortTime(
+              event.reviewTimeRange.startHour,
+              event.reviewTimeRange.startMinute
+            )} - ${formatShortTime(
+              event.reviewTimeRange.endHour,
+              event.reviewTimeRange.endMinute
+            )}`}
+      </Text>
+    </Pressable>
+  );
+}
+
+function TimelineHours({ styles, showTimezone = true }) {
+  return (
+    <View style={styles.timelineHours}>
+      <Text style={styles.timezoneLabel}>
+        {showTimezone ? "GMT+08" : ""}
+      </Text>
+      {HOURS.map((hour) => (
+        <View key={hour} style={styles.hourLabelCell}>
+          <Text style={styles.hourLabelText}>{formatTimeLabel(hour)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function DayTimeline({ date, events, styles, onEventPress }) {
+  return (
+    <View style={styles.timelineWrap}>
+      <View style={styles.dayHeaderWrap}>
+        <Text style={styles.dayHeaderName}>{WEEK_DAYS[date.getDay()]}</Text>
+        <View style={styles.dayHeaderBubble}>
+          <Text style={styles.dayHeaderBubbleText}>{date.getDate()}</Text>
+        </View>
+      </View>
+
+      <ScrollView
+        style={styles.timelineScroll}
+        contentContainerStyle={styles.timelineScrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.timelineBodyRow}>
+          <TimelineHours styles={styles} />
+
+          <View style={[styles.singleDayColumn, { width: DAY_COLUMN_WIDTH }]}>
+            {HOURS.map((hour) => (
+              <View key={hour} style={styles.hourGridCell} />
+            ))}
+
+            {events.map((event, index) => (
+              <TimelineEvent
+                key={event.id}
+                event={event}
+                index={index}
+                styles={styles}
+                columnWidth={DAY_COLUMN_WIDTH}
+                onPress={onEventPress}
+              />
+            ))}
+          </View>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+function WeekTimeline({
+  dates,
+  eventsByDate,
+  selectedKey,
+  onSelectDate,
+  styles,
+  onEventPress,
+}) {
+  const hoursScrollRef = useRef(null);
+  const gridScrollRef = useRef(null);
+  const syncingRef = useRef(null);
+
+  const syncScroll = (source, offsetY) => {
+    if (syncingRef.current && syncingRef.current !== source) {
+      syncingRef.current = null;
+      return;
+    }
+
+    syncingRef.current = source;
+    const targetRef = source === "hours" ? gridScrollRef : hoursScrollRef;
+    if (targetRef.current) {
+      targetRef.current.scrollTo({ y: offsetY, animated: false });
+    }
+  };
+
+  return (
+    <View style={styles.timelineWrap}>
+      <View style={styles.weekStickyLayout}>
+        <View>
+          <View style={styles.weekStickyHeaderSpacer} />
+          <ScrollView
+            ref={hoursScrollRef}
+            style={styles.timelineScroll}
+            contentContainerStyle={styles.timelineScrollContent}
+            showsVerticalScrollIndicator={false}
+            scrollEventThrottle={16}
+            onScroll={(event) =>
+              syncScroll("hours", event.nativeEvent.contentOffset.y)
+            }
+          >
+            <TimelineHours styles={styles} showTimezone={false} />
+          </ScrollView>
+        </View>
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View>
+            <View style={styles.weekCalendarHeader}>
+              {dates.map((date) => {
+                const key = formatDateKey(date);
+                const active = key === selectedKey;
+
+                return (
+                  <Pressable
+                    key={key}
+                    style={[styles.weekCalendarDay, { width: WEEK_COLUMN_WIDTH }]}
+                    onPress={() => onSelectDate(date)}
+                  >
+                    <Text style={styles.weekCalendarDayName}>
+                      {WEEK_DAYS[date.getDay()]}
+                    </Text>
+                    <View
+                      style={[
+                        styles.weekCalendarDateCircle,
+                        active && styles.weekCalendarDateCircleActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.weekCalendarDateText,
+                          active && styles.weekCalendarDateTextActive,
+                        ]}
+                      >
+                        {date.getDate()}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <ScrollView
+              ref={gridScrollRef}
+              style={styles.timelineScroll}
+              contentContainerStyle={styles.timelineScrollContent}
+              showsVerticalScrollIndicator={false}
+              scrollEventThrottle={16}
+              onScroll={(event) =>
+                syncScroll("grid", event.nativeEvent.contentOffset.y)
+              }
+            >
+              <View style={styles.weekColumnsRow}>
+                {dates.map((date) => {
+                  const key = formatDateKey(date);
+                  const events = eventsByDate[key] || [];
+
+                  return (
+                    <View
+                      key={key}
+                      style={[styles.weekTimelineColumn, { width: WEEK_COLUMN_WIDTH }]}
+                    >
+                      {HOURS.map((hour) => (
+                        <View key={hour} style={styles.hourGridCell} />
+                      ))}
+
+                      {events.map((event, index) => (
+                        <TimelineEvent
+                          key={event.id}
+                          event={event}
+                          index={index}
+                          styles={styles}
+                          columnWidth={WEEK_COLUMN_WIDTH}
+                          onPress={onEventPress}
+                        />
+                      ))}
+                    </View>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          </View>
+        </ScrollView>
+      </View>
+    </View>
+  );
+}
+
+function ReviewList({ events, styles, onEventPress }) {
   return (
     <FlatList
       data={events}
@@ -86,16 +370,26 @@ function ReviewList({ events, styles }) {
         <Text style={styles.emptyText}>No review sessions in this range.</Text>
       }
       renderItem={({ item, index }) => (
-        <View
+        <Pressable
+          onPress={() => onEventPress?.(item)}
           style={[
             styles.reviewCard,
             index % 2 === 0 ? styles.reviewCardBlue : styles.reviewCardOrange,
           ]}
         >
           <Text style={styles.reviewTitle}>{item.title}</Text>
-          <Text style={styles.reviewMeta}>Review day +{item.dayOffset}</Text>
+          <Text style={styles.reviewMeta}>
+            {item.type === "english-word"
+              ? formatTimeRange(item.reviewTimeRange)
+              : formatTimeRange(item.reviewTimeRange)}
+          </Text>
+          <Text style={styles.reviewMeta}>
+            {item.type === "english-word"
+              ? `Review day +${item.dayOffset}`
+              : `Review day +${item.dayOffset}`}
+          </Text>
           <Text style={styles.reviewMeta}>{formatHeaderDate(item.dateObj)}</Text>
-        </View>
+        </Pressable>
       )}
       contentContainerStyle={styles.listContent}
       style={styles.list}
@@ -119,17 +413,26 @@ function AppButton({ title, onPress, variant = "primary", styles }) {
   );
 }
 
-export default function Schedule({ navigation, learningItems, isDark }) {
+export default function Schedule({
+  navigation,
+  learningItems,
+  englishWords,
+  isDark,
+}) {
   const [viewMode, setViewMode] = useState("month");
   const [selectedDate, setSelectedDate] = useState(normalizeDate(new Date()));
   const [monthAnchor, setMonthAnchor] = useState(normalizeDate(new Date()));
   const colors = isDark ? DARK_COLORS : LIGHT_COLORS;
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const reviewEvents = useMemo(() => {
+  const learningReviewEvents = useMemo(() => {
     const events = [];
 
     learningItems.forEach((item) => {
+      if (item.type && item.type !== "learning") {
+        return;
+      }
+
       item.reviews.forEach((review, index) => {
         const dateObj = normalizeDate(new Date(review.date));
         const dateKey = formatDateKey(dateObj);
@@ -137,6 +440,13 @@ export default function Schedule({ navigation, learningItems, isDark }) {
         events.push({
           id: `${item.id}-${index}`,
           title: item.title,
+          type: "learning",
+          reviewTimeRange: item.reviewTimeRange || {
+            startHour: 0,
+            startMinute: 0,
+            endHour: 0,
+            endMinute: 30,
+          },
           dayOffset: review.dayOffset,
           dateObj,
           dateKey,
@@ -144,8 +454,78 @@ export default function Schedule({ navigation, learningItems, isDark }) {
       });
     });
 
-    return events.sort((a, b) => a.dateObj - b.dateObj);
+    return events.sort((a, b) => {
+      const aStart =
+        a.dateObj.getTime() +
+        (a.reviewTimeRange.startHour * 60 + a.reviewTimeRange.startMinute) *
+          60 *
+          1000;
+      const bStart =
+        b.dateObj.getTime() +
+        (b.reviewTimeRange.startHour * 60 + b.reviewTimeRange.startMinute) *
+          60 *
+          1000;
+      return aStart - bStart;
+    });
   }, [learningItems]);
+
+  const englishWordEvents = useMemo(() => {
+    const events = [];
+
+    englishWords.forEach((word) => {
+      (word.reviews || []).forEach((review, index) => {
+        const dateObj = normalizeDate(new Date(review.date));
+        const dateKey = formatDateKey(dateObj);
+
+        events.push({
+          id: `${word.id}-${index}`,
+          title: `${word.title} ${formatEnglishEventDate(dateObj)}`,
+          type: "english-word",
+          reviewTimeRange: word.reviewTimeRange || {
+            startHour: 0,
+            startMinute: 0,
+            endHour: 0,
+            endMinute: 30,
+          },
+          dayOffset: review.dayOffset,
+          dateObj,
+          dateKey,
+        });
+      });
+    });
+
+    return events.sort((a, b) => {
+      const aStart =
+        a.dateObj.getTime() +
+        (a.reviewTimeRange.startHour * 60 + a.reviewTimeRange.startMinute) *
+          60 *
+          1000;
+      const bStart =
+        b.dateObj.getTime() +
+        (b.reviewTimeRange.startHour * 60 + b.reviewTimeRange.startMinute) *
+          60 *
+          1000;
+      return aStart - bStart;
+    });
+  }, [englishWords]);
+
+  const reviewEvents = useMemo(
+    () =>
+      [...learningReviewEvents, ...englishWordEvents].sort((a, b) => {
+        const aStart =
+          a.dateObj.getTime() +
+          (a.reviewTimeRange.startHour * 60 + a.reviewTimeRange.startMinute) *
+            60 *
+            1000;
+        const bStart =
+          b.dateObj.getTime() +
+          (b.reviewTimeRange.startHour * 60 + b.reviewTimeRange.startMinute) *
+            60 *
+            1000;
+        return aStart - bStart;
+      }),
+    [englishWordEvents, learningReviewEvents]
+  );
 
   const eventsByDate = useMemo(() => {
     return reviewEvents.reduce((acc, event) => {
@@ -169,6 +549,8 @@ export default function Schedule({ navigation, learningItems, isDark }) {
   );
 
   const monthCells = useMemo(() => buildMonthCells(monthAnchor), [monthAnchor]);
+
+  const handleEventPress = () => {};
 
   const shiftView = (amount) => {
     if (viewMode === "day") {
@@ -194,12 +576,23 @@ export default function Schedule({ navigation, learningItems, isDark }) {
       </View>
 
       <View style={styles.topButtonWrap}>
-        <AppButton
-          title="Add New Learning"
-          variant="accent"
-          onPress={() => navigation.navigate("NewLearning")}
-          styles={styles}
-        />
+        <View style={styles.topActionsRow}>
+          <View style={styles.topActionItem}>
+            <AppButton
+              title="Add New Learning"
+              variant="accent"
+              onPress={() => navigation.navigate("NewLearning")}
+              styles={styles}
+            />
+          </View>
+          <View style={styles.topActionItem}>
+            <AppButton
+              title="English Word"
+              onPress={() => navigation.navigate("EnglishWord")}
+              styles={styles}
+            />
+          </View>
+        </View>
       </View>
 
       <View style={styles.modeRow}>
@@ -238,31 +631,24 @@ export default function Schedule({ navigation, learningItems, isDark }) {
         <AppButton title="Next" onPress={() => shiftView(1)} styles={styles} />
       </View>
 
-      {viewMode === "day" && <ReviewList events={dayEvents} styles={styles} />}
+      {viewMode === "day" && (
+        <DayTimeline
+          date={selectedDate}
+          events={dayEvents}
+          styles={styles}
+          onEventPress={handleEventPress}
+        />
+      )}
 
       {viewMode === "week" && (
-        <View style={styles.sectionWrap}>
-          <View style={styles.weekRow}>
-            {weekDates.map((date) => {
-              const key = formatDateKey(date);
-              const count = (eventsByDate[key] || []).length;
-              const active = key === selectedKey;
-
-              return (
-                <Pressable
-                  key={key}
-                  style={[styles.weekCell, active && styles.weekCellActive]}
-                  onPress={() => setSelectedDate(date)}
-                >
-                  <Text style={styles.weekCellDay}>{WEEK_DAYS[date.getDay()]}</Text>
-                  <Text style={styles.weekCellDate}>{date.getDate()}</Text>
-                  <Text style={styles.weekCellCount}>{count}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-          <ReviewList events={weekEvents} styles={styles} />
-        </View>
+        <WeekTimeline
+          dates={weekDates}
+          eventsByDate={eventsByDate}
+          selectedKey={selectedKey}
+          onSelectDate={setSelectedDate}
+          styles={styles}
+          onEventPress={handleEventPress}
+        />
       )}
 
       {viewMode === "month" && (
@@ -304,7 +690,21 @@ export default function Schedule({ navigation, learningItems, isDark }) {
           <Text style={styles.selectedDateLabel}>
             Selected: {formatHeaderDate(selectedDate)}
           </Text>
-          <ReviewList events={dayEvents} styles={styles} />
+          <ReviewList
+            events={dayEvents}
+            styles={styles}
+            onEventPress={handleEventPress}
+          />
+        </View>
+      )}
+
+      {viewMode === "week" && (
+        <View style={styles.weekFooterList}>
+          <ReviewList
+            events={weekEvents}
+            styles={styles}
+            onEventPress={handleEventPress}
+          />
         </View>
       )}
     </SafeAreaView>
@@ -342,6 +742,13 @@ function createStyles(colors) {
     },
     topButtonWrap: {
       marginBottom: 10,
+    },
+    topActionsRow: {
+      flexDirection: "row",
+      gap: 8,
+    },
+    topActionItem: {
+      flex: 1,
     },
     appButton: {
       borderRadius: 10,
@@ -409,38 +816,177 @@ function createStyles(colors) {
     sectionWrap: {
       flex: 1,
     },
-    weekRow: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      gap: 4,
-      marginBottom: 10,
-    },
-    weekCell: {
+    timelineWrap: {
       flex: 1,
+      backgroundColor: colors.panel,
+      borderRadius: 18,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: 10,
-      paddingVertical: 7,
-      alignItems: "center",
+      overflow: "hidden",
+    },
+    timelineScroll: {
+      flex: 1,
+    },
+    timelineScrollContent: {
+      paddingBottom: 24,
+    },
+    timelineBodyRow: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+    },
+    timelineHours: {
+      width: TIME_GUTTER_WIDTH,
       backgroundColor: colors.panel,
     },
-    weekCellActive: {
-      borderColor: colors.primary,
-      backgroundColor: colors.weekActive,
-    },
-    weekCellDay: {
-      fontSize: 12,
-      color: colors.muted,
-    },
-    weekCellDate: {
-      fontSize: 14,
-      fontWeight: "700",
+    timezoneLabel: {
+      height: HOUR_HEIGHT,
+      textAlign: "center",
+      textAlignVertical: "center",
       color: colors.text,
-    },
-    weekCellCount: {
-      fontSize: 12,
-      color: colors.accent,
       fontWeight: "700",
+      paddingTop: 18,
+      borderRightWidth: 1,
+      borderBottomWidth: 1,
+      borderColor: colors.timelineLine,
+    },
+    hourLabelCell: {
+      height: HOUR_HEIGHT,
+      justifyContent: "flex-start",
+      alignItems: "center",
+      paddingTop: 6,
+      borderRightWidth: 1,
+      borderBottomWidth: 1,
+      borderColor: colors.timelineLine,
+    },
+    hourLabelText: {
+      color: colors.text,
+      fontSize: 12,
+      fontWeight: "600",
+    },
+    dayHeaderWrap: {
+      alignItems: "center",
+      paddingTop: 10,
+      paddingBottom: 8,
+      backgroundColor: colors.panel,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    dayHeaderName: {
+      color: colors.primary,
+      fontWeight: "700",
+      fontSize: 14,
+      marginBottom: 6,
+    },
+    dayHeaderBubble: {
+      width: 58,
+      height: 58,
+      borderRadius: 29,
+      backgroundColor: colors.primary,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    dayHeaderBubbleText: {
+      color: "#fff",
+      fontWeight: "800",
+      fontSize: 24,
+    },
+    singleDayColumn: {
+      position: "relative",
+      borderRightWidth: 1,
+      borderColor: colors.timelineLine,
+    },
+    hourGridCell: {
+      height: HOUR_HEIGHT,
+      borderBottomWidth: 1,
+      borderColor: colors.timelineLine,
+    },
+    weekCalendarHeader: {
+      flexDirection: "row",
+      height: WEEK_HEADER_HEIGHT,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+      backgroundColor: colors.panel,
+      alignItems: "center",
+    },
+    weekStickyLayout: {
+      flexDirection: "row",
+      flex: 1,
+    },
+    weekStickyHeaderSpacer: {
+      height: WEEK_HEADER_HEIGHT,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+      backgroundColor: colors.panel,
+    },
+    weekCalendarDay: {
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    weekCalendarDayName: {
+      color: colors.text,
+      fontWeight: "700",
+      fontSize: 13,
+      marginBottom: 6,
+    },
+    weekCalendarDateCircle: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    weekCalendarDateCircleActive: {
+      backgroundColor: colors.primary,
+    },
+    weekCalendarDateText: {
+      color: colors.text,
+      fontSize: 22,
+      fontWeight: "800",
+    },
+    weekCalendarDateTextActive: {
+      color: "#fff",
+    },
+    weekColumnsRow: {
+      flexDirection: "row",
+    },
+    weekTimelineColumn: {
+      position: "relative",
+      borderRightWidth: 1,
+      borderColor: colors.timelineLine,
+    },
+    timelineEvent: {
+      position: "absolute",
+      borderRadius: 10,
+      paddingHorizontal: 8,
+      paddingVertical: 6,
+      overflow: "hidden",
+    },
+    timelineEventBlue: {
+      backgroundColor: colors.eventBlue,
+    },
+    timelineEventGreen: {
+      backgroundColor: colors.eventGreen,
+    },
+    timelineEventTitle: {
+      color: "#fff",
+      fontWeight: "800",
+      fontSize: 13,
+      marginTop: 2,
+    },
+    timelineEventTime: {
+      color: "#eef4ff",
+      fontSize: 11,
+      marginTop: 2,
+    },
+    timelineEventBadge: {
+      color: "#f5f9ff",
+      fontSize: 9,
+      fontWeight: "800",
+      letterSpacing: 0.7,
+    },
+    weekFooterList: {
+      marginTop: 10,
+      maxHeight: 180,
     },
     weekHeaderRow: {
       flexDirection: "row",
@@ -548,4 +1094,3 @@ function createStyles(colors) {
     },
   });
 }
-

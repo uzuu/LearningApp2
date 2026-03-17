@@ -1,10 +1,10 @@
 ﻿import { useMemo, useState } from "react";
 import {
+  FlatList,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
-
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -33,19 +33,65 @@ const DARK_COLORS = {
   inputBg: "#0f1b2c",
 };
 
+const TIME_OPTIONS = Array.from({ length: 96 }, (_, index) => {
+  const hour = Math.floor(index / 4);
+  const minute = (index % 4) * 15;
+  return {
+    value: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
+    hour,
+    minute,
+  };
+});
+
+function formatTimeLabel(hourText, minuteText) {
+  const rawHour = hourText === "" ? 0 : Number.parseInt(hourText, 10);
+  const rawMinute = minuteText === "" ? 0 : Number.parseInt(minuteText, 10);
+  const safeHour = Number.isNaN(rawHour) ? 0 : rawHour;
+  const safeMinute = Number.isNaN(rawMinute) ? 0 : rawMinute;
+  const period = safeHour >= 12 ? "pm" : "am";
+  const hour12 = safeHour % 12 === 0 ? 12 : safeHour % 12;
+  return `${hour12}:${String(safeMinute).padStart(2, "0")}${period}`;
+}
+
 export default function NewLearning({ navigation, onAddLearningItem, isDark }) {
   const [title, setTitle] = useState("");
+  const [startHour, setStartHour] = useState("0");
+  const [startMinute, setStartMinute] = useState("0");
+  const [endHour, setEndHour] = useState("0");
+  const [endMinute, setEndMinute] = useState("30");
   const [focused, setFocused] = useState(false);
+  const [openPicker, setOpenPicker] = useState(null);
   const colors = isDark ? DARK_COLORS : LIGHT_COLORS;
   const styles = useMemo(() => createStyles(colors), [colors]);
 
+  const selectTime = (type, hour, minute) => {
+    if (type === "start") {
+      setStartHour(String(hour));
+      setStartMinute(String(minute));
+    } else {
+      setEndHour(String(hour));
+      setEndMinute(String(minute));
+    }
+    setOpenPicker(null);
+  };
+
   const handleAdd = () => {
-    const added = onAddLearningItem(title);
+    const added = onAddLearningItem({
+      title,
+      startHour,
+      startMinute,
+      endHour,
+      endMinute,
+    });
     if (!added) {
       return;
     }
 
     setTitle("");
+    setStartHour("0");
+    setStartMinute("0");
+    setEndHour("0");
+    setEndMinute("30");
     navigation.navigate("Schedule");
   };
 
@@ -53,7 +99,9 @@ export default function NewLearning({ navigation, onAddLearningItem, isDark }) {
     <SafeAreaView style={styles.container} edges={["bottom"]}>
       <View style={styles.card}>
         <Text style={styles.title}>Add New Learning</Text>
-        <Text style={styles.caption}>Reviews will be scheduled on: {INTERVALS} days</Text>
+        <Text style={styles.caption}>
+          Reviews will be scheduled on: {INTERVALS} days
+        </Text>
 
         <TextInput
           value={title}
@@ -64,6 +112,86 @@ export default function NewLearning({ navigation, onAddLearningItem, isDark }) {
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
         />
+
+        <View style={styles.durationRow}>
+          <View style={styles.durationField}>
+            <Text style={styles.fieldLabel}>Start Time</Text>
+            <Pressable
+              onPress={() =>
+                setOpenPicker((current) => (current === "start" ? null : "start"))
+              }
+              style={[
+                styles.timeSelector,
+                openPicker === "start" && styles.timeSelectorActive,
+              ]}
+            >
+              <Text style={styles.timeSelectorText}>
+                {formatTimeLabel(startHour, startMinute)}
+              </Text>
+            </Pressable>
+          </View>
+
+          <Text style={styles.rangeDash}>-</Text>
+
+          <View style={styles.durationField}>
+            <Text style={styles.fieldLabel}>End Time</Text>
+            <Pressable
+              onPress={() =>
+                setOpenPicker((current) => (current === "end" ? null : "end"))
+              }
+              style={[
+                styles.timeSelector,
+                openPicker === "end" && styles.timeSelectorActive,
+              ]}
+            >
+              <Text style={styles.timeSelectorText}>
+                {formatTimeLabel(endHour, endMinute)}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {openPicker && (
+          <View style={styles.pickerCard}>
+            <FlatList
+              data={TIME_OPTIONS}
+              keyExtractor={(item) => item.value}
+              style={styles.pickerList}
+              nestedScrollEnabled
+              renderItem={({ item }) => {
+                const isSelected =
+                  openPicker === "start"
+                    ? Number.parseInt(startHour, 10) === item.hour &&
+                      Number.parseInt(startMinute, 10) === item.minute
+                    : Number.parseInt(endHour, 10) === item.hour &&
+                      Number.parseInt(endMinute, 10) === item.minute;
+
+                return (
+                  <Pressable
+                    onPress={() => selectTime(openPicker, item.hour, item.minute)}
+                    style={[
+                      styles.pickerItem,
+                      isSelected && styles.pickerItemSelected,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.pickerItemText,
+                        isSelected && styles.pickerItemTextSelected,
+                      ]}
+                    >
+                      {formatTimeLabel(String(item.hour), String(item.minute))}
+                    </Text>
+                  </Pressable>
+                );
+              }}
+            />
+          </View>
+        )}
+
+        <Text style={styles.helperText}>
+          Enter the start and end time for that day's review session.
+        </Text>
 
         <Pressable
           onPress={handleAdd}
@@ -103,6 +231,79 @@ function createStyles(colors) {
       color: colors.muted,
       fontSize: 13,
     },
+    durationRow: {
+      flexDirection: "row",
+      alignItems: "flex-end",
+      gap: 10,
+    },
+    durationField: {
+      flex: 1,
+      gap: 6,
+    },
+    rangeDash: {
+      color: colors.text,
+      fontSize: 26,
+      fontWeight: "700",
+      paddingBottom: 10,
+    },
+    fieldLabel: {
+      color: colors.text,
+      fontSize: 13,
+      fontWeight: "700",
+    },
+    timeSelector: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 10,
+      minHeight: 52,
+      paddingHorizontal: 12,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.inputBg,
+    },
+    timeSelectorActive: {
+      borderColor: colors.primary,
+      borderBottomWidth: 3,
+    },
+    timeSelectorText: {
+      fontSize: 18,
+      fontWeight: "700",
+      color: colors.text,
+    },
+    pickerCard: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 12,
+      backgroundColor: colors.panel,
+      maxHeight: 220,
+      overflow: "hidden",
+      shadowColor: "#000",
+      shadowOpacity: 0.12,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 4,
+    },
+    pickerList: {
+      maxHeight: 220,
+    },
+    pickerItem: {
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    pickerItemSelected: {
+      backgroundColor: colors.primary,
+    },
+    pickerItemText: {
+      color: colors.text,
+      fontSize: 16,
+      fontWeight: "500",
+    },
+    pickerItemTextSelected: {
+      color: "#fff",
+      fontWeight: "700",
+    },
     input: {
       borderWidth: 1,
       borderColor: colors.border,
@@ -116,6 +317,11 @@ function createStyles(colors) {
     inputFocused: {
       borderColor: colors.primary,
       backgroundColor: colors.panel,
+    },
+    helperText: {
+      color: colors.muted,
+      fontSize: 12,
+      lineHeight: 18,
     },
     saveButton: {
       minHeight: 46,
