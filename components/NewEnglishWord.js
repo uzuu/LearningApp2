@@ -30,7 +30,6 @@ export default function NewEnglishWord({
   isDark,
 }) {
   const [title, setTitle] = useState("");
-  const [focused, setFocused] = useState(false);
   const colors = isDark ? DARK_COLORS : LIGHT_COLORS;
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -49,7 +48,8 @@ export default function NewEnglishWord({
       <View style={styles.card}>
         <Text style={styles.title}>English Word</Text>
         <Text style={styles.caption}>
-          Words added today will be grouped into one repeat event.
+          Enter only the word. The app will find the Mongolian translation,
+          pronunciation, and 5 example sentences automatically.
         </Text>
 
         <TextInput
@@ -57,9 +57,8 @@ export default function NewEnglishWord({
           onChangeText={setTitle}
           placeholder="Enter an english word"
           placeholderTextColor={colors.muted}
-          style={[styles.input, focused && styles.inputFocused]}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          style={styles.input}
+          autoCapitalize="none"
         />
 
         <Pressable
@@ -110,10 +109,6 @@ function createStyles(colors) {
       fontSize: 16,
       color: colors.text,
       backgroundColor: colors.inputBg,
-    },
-    inputFocused: {
-      borderColor: colors.primary,
-      backgroundColor: colors.panel,
     },
     saveButton: {
       minHeight: 46,

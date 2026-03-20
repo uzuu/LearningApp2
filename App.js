@@ -9,7 +9,7 @@ import { StatusBar } from "expo-status-bar";
 import { Pressable, StyleSheet, Text, useColorScheme } from "react-native";
 import NewEnglishWord from "./components/NewEnglishWord";
 import NewLearning from "./components/NewLearning";
-import RepeatEnglish from "./components/RepeatEnglish";
+import Newword from "./components/Newword";
 import Schedule from "./components/Schedule";
 
 const Stack = createNativeStackNavigator();
@@ -129,13 +129,8 @@ export default function App() {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       title: cleanedTitle,
       createdAt: new Date().toISOString(),
+      order: englishWords.length,
       type: "english-word",
-      reviewTimeRange: {
-        startHour: 0,
-        startMinute: 0,
-        endHour: 0,
-        endMinute: 30,
-      },
       reviews,
     };
 
@@ -194,11 +189,8 @@ export default function App() {
             />
           )}
         </Stack.Screen>
-        <Stack.Screen
-          name="RepeatEnglish"
-          options={{ title: "Repeat English" }}
-        >
-          {(props) => <RepeatEnglish {...props} isDark={isDark} />}
+        <Stack.Screen name="Newword" options={{ title: "New Word" }}>
+          {(props) => <Newword {...props} isDark={isDark} />}
         </Stack.Screen>
       </Stack.Navigator>
     </NavigationContainer>

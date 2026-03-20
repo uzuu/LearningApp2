@@ -145,7 +145,7 @@ function buildEventStyle(event, columnWidth) {
 
 function TimelineEvent({ event, index, styles, columnWidth, onPress }) {
   const eventStyle = buildEventStyle(event, columnWidth);
-  const isBlue = event.type !== "english-word";
+  const isBlue = event.type !== "new-word";
 
   return (
     <Pressable
@@ -157,17 +157,14 @@ function TimelineEvent({ event, index, styles, columnWidth, onPress }) {
       ]}
     >
       <Text style={styles.timelineEventBadge}>
-        {event.type === "english-word" ? "WORD" : "LEARNING"}
+        {event.type === "new-word" ? "NEW WORD" : "LEARNING"}
       </Text>
-      <Text
-        numberOfLines={1}
-        style={styles.timelineEventTitle}
-      >
+      <Text numberOfLines={2} style={styles.timelineEventTitle}>
         {event.title}
       </Text>
       <Text style={styles.timelineEventTime}>
-        {event.type === "english-word"
-          ? `Review day +${event.dayOffset}`
+        {event.type === "new-word"
+          ? `${event.words.length} word${event.words.length === 1 ? "" : "s"}`
           : `${formatShortTime(
               event.reviewTimeRange.startHour,
               event.reviewTimeRange.startMinute
@@ -378,14 +375,10 @@ function ReviewList({ events, styles, onEventPress }) {
           ]}
         >
           <Text style={styles.reviewTitle}>{item.title}</Text>
+          <Text style={styles.reviewMeta}>{formatTimeRange(item.reviewTimeRange)}</Text>
           <Text style={styles.reviewMeta}>
-            {item.type === "english-word"
-              ? formatTimeRange(item.reviewTimeRange)
-              : formatTimeRange(item.reviewTimeRange)}
-          </Text>
-          <Text style={styles.reviewMeta}>
-            {item.type === "english-word"
-              ? `Review day +${item.dayOffset}`
+            {item.type === "new-word"
+              ? `${item.words.length} word${item.words.length === 1 ? "" : "s"}`
               : `Review day +${item.dayOffset}`}
           </Text>
           <Text style={styles.reviewMeta}>{formatHeaderDate(item.dateObj)}</Text>
@@ -470,27 +463,61 @@ export default function Schedule({
   }, [learningItems]);
 
   const englishWordEvents = useMemo(() => {
-    const events = [];
+    const groupedByCreatedDate = englishWords.reduce((acc, word) => {
+      const sourceDateObj = normalizeDate(new Date(word.createdAt));
+      const sourceDateKey = formatDateKey(sourceDateObj);
 
-    englishWords.forEach((word) => {
-      (word.reviews || []).forEach((review, index) => {
+      if (!acc[sourceDateKey]) {
+        acc[sourceDateKey] = {
+          sourceDateObj,
+          sourceDateKey,
+          words: [],
+          sourceOrder: word.order ?? 0,
+        };
+      }
+
+      acc[sourceDateKey].words.push(word);
+      acc[sourceDateKey].sourceOrder = Math.min(
+        acc[sourceDateKey].sourceOrder,
+        word.order ?? 0
+      );
+      return acc;
+    }, {});
+
+    const events = Object.values(groupedByCreatedDate).flatMap((group) => {
+      const sortedWords = [...group.words].sort((a, b) => {
+        const aOrder = a.order ?? 0;
+        const bOrder = b.order ?? 0;
+        if (aOrder !== bOrder) {
+          return aOrder - bOrder;
+        }
+
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      });
+
+      const baseReviews = sortedWords[0]?.reviews || [];
+
+      return baseReviews.map((review) => {
         const dateObj = normalizeDate(new Date(review.date));
         const dateKey = formatDateKey(dateObj);
 
-        events.push({
-          id: `${word.id}-${index}`,
-          title: `${word.title} ${formatEnglishEventDate(dateObj)}`,
-          type: "english-word",
-          reviewTimeRange: word.reviewTimeRange || {
-            startHour: 0,
+        return {
+          id: `new-word-${group.sourceDateKey}-${dateKey}`,
+          title: `New word ${formatEnglishEventDate(group.sourceDateObj)}`,
+          type: "new-word",
+          reviewTimeRange: {
+            startHour: 8,
             startMinute: 0,
-            endHour: 0,
-            endMinute: 30,
+            endHour: 10,
+            endMinute: 0,
           },
-          dayOffset: review.dayOffset,
           dateObj,
           dateKey,
-        });
+          dayOffset: review.dayOffset,
+          words: sortedWords,
+          sourceDateObj: group.sourceDateObj,
+          sourceOrder: group.sourceOrder,
+        };
       });
     });
 
@@ -505,7 +532,11 @@ export default function Schedule({
         (b.reviewTimeRange.startHour * 60 + b.reviewTimeRange.startMinute) *
           60 *
           1000;
-      return aStart - bStart;
+      if (aStart !== bStart) {
+        return aStart - bStart;
+      }
+
+      return (a.sourceOrder ?? 0) - (b.sourceOrder ?? 0);
     });
   }, [englishWords]);
 
@@ -522,7 +553,11 @@ export default function Schedule({
           (b.reviewTimeRange.startHour * 60 + b.reviewTimeRange.startMinute) *
             60 *
             1000;
-        return aStart - bStart;
+        if (aStart !== bStart) {
+          return aStart - bStart;
+        }
+
+        return (a.sourceOrder ?? -1) - (b.sourceOrder ?? -1);
       }),
     [englishWordEvents, learningReviewEvents]
   );
@@ -550,7 +585,14 @@ export default function Schedule({
 
   const monthCells = useMemo(() => buildMonthCells(monthAnchor), [monthAnchor]);
 
-  const handleEventPress = () => {};
+  const handleEventPress = (event) => {
+    if (event.type === "new-word") {
+      navigation.navigate("Newword", {
+        words: event.words,
+        dateLabel: formatHeaderDate(event.sourceDateObj || event.dateObj),
+      });
+    }
+  };
 
   const shiftView = (amount) => {
     if (viewMode === "day") {
@@ -977,6 +1019,12 @@ function createStyles(colors) {
       color: "#eef4ff",
       fontSize: 11,
       marginTop: 2,
+    },
+    timelineEventDateText: {
+      color: "#eef4ff",
+      fontSize: 11,
+      marginTop: 2,
+      fontWeight: "700",
     },
     timelineEventBadge: {
       color: "#f5f9ff",
