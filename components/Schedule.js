@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import {
+  Alert,
   FlatList,
   Pressable,
   ScrollView,
@@ -11,7 +12,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 const VIEW_MODES = ["day", "week", "month"];
 const WEEK_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const HOUR_HEIGHT = 64;
+const BASE_HOUR_HEIGHT = 64;
 const WEEK_HEADER_HEIGHT = 82;
 const HOURS = Array.from({ length: 24 }, (_, index) => index);
 const DAY_COLUMN_WIDTH = 280;
@@ -133,18 +134,128 @@ function getEventMinutes(timeRange) {
   };
 }
 
-function buildEventStyle(event, columnWidth) {
+function estimateEventMinHeight(event, columnWidth) {
+  const safeWidth = Math.max(columnWidth - 20, 44);
+  const estimatedCharsPerLine = Math.max(Math.floor(safeWidth / 7), 8);
+  const titleLines = Math.max(
+    Math.ceil(String(event.title || "").length / estimatedCharsPerLine),
+    1
+  );
+  const badgeHeight = 12;
+  const titleHeight = titleLines * 14;
+  const metaHeight = 12;
+  const verticalPadding = 14;
+  return badgeHeight + titleHeight + metaHeight + verticalPadding;
+}
+
+function getDynamicHourHeight(events, columnWidth) {
+  const requiredHeights = events.map((event) => {
+    const { duration } = getEventMinutes(event.reviewTimeRange);
+    const minHeight = estimateEventMinHeight(event, columnWidth);
+    return (minHeight * 60) / Math.max(duration, 30);
+  });
+
+  return Math.max(BASE_HOUR_HEIGHT, Math.ceil(Math.max(...requiredHeights, BASE_HOUR_HEIGHT)));
+}
+
+function buildPositionedEvents(events) {
+  const sortedEvents = [...events].sort((a, b) => {
+    const aMinutes = getEventMinutes(a.reviewTimeRange);
+    const bMinutes = getEventMinutes(b.reviewTimeRange);
+    if (aMinutes.start !== bMinutes.start) {
+      return aMinutes.start - bMinutes.start;
+    }
+
+    if (aMinutes.end !== bMinutes.end) {
+      return aMinutes.end - bMinutes.end;
+    }
+
+    return (a.sourceOrder ?? -1) - (b.sourceOrder ?? -1);
+  });
+
+  const positionedEvents = [];
+  let active = [];
+  let cluster = [];
+  let clusterColumnCount = 0;
+
+  const finalizeCluster = () => {
+    if (!cluster.length) {
+      return;
+    }
+
+    positionedEvents.push(
+      ...cluster.map((event) => ({
+        ...event,
+        layoutColumnCount: Math.max(clusterColumnCount, 1),
+      }))
+    );
+    cluster = [];
+    clusterColumnCount = 0;
+  };
+
+  sortedEvents.forEach((event) => {
+    const eventMinutes = getEventMinutes(event.reviewTimeRange);
+    active = active.filter((item) => item.end > eventMinutes.start);
+
+    if (!active.length) {
+      finalizeCluster();
+    }
+
+    const usedColumns = new Set(active.map((item) => item.column));
+    let column = 0;
+    while (usedColumns.has(column)) {
+      column += 1;
+    }
+
+    active.push({
+      id: event.id,
+      column,
+      end: eventMinutes.end,
+    });
+
+    cluster.push({
+      ...event,
+      layoutColumn: column,
+    });
+    clusterColumnCount = Math.max(
+      clusterColumnCount,
+      ...active.map((item) => item.column + 1)
+    );
+  });
+
+  finalizeCluster();
+  return positionedEvents;
+}
+
+function buildEventStyle(event, columnWidth, hourHeight) {
   const { start, duration } = getEventMinutes(event.reviewTimeRange);
+  const horizontalGap = 4;
+  const layoutColumnCount = Math.max(event.layoutColumnCount || 1, 1);
+  const totalHorizontalInset = 8 + horizontalGap * (layoutColumnCount - 1);
+  const eventWidth = Math.max(
+    (columnWidth - totalHorizontalInset) / layoutColumnCount,
+    44
+  );
+
   return {
-    top: (start / 60) * HOUR_HEIGHT + 2,
-    left: 4,
-    width: columnWidth - 8,
-    height: Math.max((duration / 60) * HOUR_HEIGHT - 4, 28),
+    top: (start / 60) * hourHeight + 2,
+    left: 4 + (event.layoutColumn || 0) * (eventWidth + horizontalGap),
+    width: eventWidth,
+    height: Math.max((duration / 60) * hourHeight - 4, 28),
+    zIndex: (event.layoutColumn || 0) + 1,
   };
 }
 
-function TimelineEvent({ event, index, styles, columnWidth, onPress }) {
-  const eventStyle = buildEventStyle(event, columnWidth);
+function TimelineEvent({
+  event,
+  index,
+  styles,
+  columnWidth,
+  hourHeight,
+  onPress,
+  onDeleteLearningItem,
+}) {
+  const eventStyle = buildEventStyle(event, columnWidth, hourHeight);
   const isBlue = event.type !== "new-word";
 
   return (
@@ -156,13 +267,21 @@ function TimelineEvent({ event, index, styles, columnWidth, onPress }) {
         eventStyle,
       ]}
     >
-      <Text style={styles.timelineEventBadge}>
+      <Text
+        numberOfLines={1}
+        style={styles.timelineEventBadge}
+      >
         {event.type === "new-word" ? "NEW WORD" : "LEARNING"}
       </Text>
-      <Text numberOfLines={2} style={styles.timelineEventTitle}>
+      <Text
+        style={styles.timelineEventTitle}
+      >
         {event.title}
       </Text>
-      <Text style={styles.timelineEventTime}>
+      <Text
+        numberOfLines={1}
+        style={styles.timelineEventTime}
+      >
         {event.type === "new-word"
           ? `${event.words.length} word${event.words.length === 1 ? "" : "s"}`
           : `${formatShortTime(
@@ -173,18 +292,29 @@ function TimelineEvent({ event, index, styles, columnWidth, onPress }) {
               event.reviewTimeRange.endMinute
             )}`}
       </Text>
+      {event.type === "learning" && (
+        <Pressable
+          onPress={() => onDeleteLearningItem?.(event.sourceItemId)}
+          style={({ pressed }) => [
+            styles.timelineDeleteButton,
+            pressed && styles.timelineDeleteButtonPressed,
+          ]}
+        >
+          <Text style={styles.timelineDeleteIcon}>🗑</Text>
+        </Pressable>
+      )}
     </Pressable>
   );
 }
 
-function TimelineHours({ styles, showTimezone = true }) {
+function TimelineHours({ styles, hourHeight, showTimezone = true }) {
   return (
     <View style={styles.timelineHours}>
-      <Text style={styles.timezoneLabel}>
+      <Text style={[styles.timezoneLabel, { height: hourHeight }]}>
         {showTimezone ? "GMT+08" : ""}
       </Text>
       {HOURS.map((hour) => (
-        <View key={hour} style={styles.hourLabelCell}>
+        <View key={hour} style={[styles.hourLabelCell, { height: hourHeight }]}>
           <Text style={styles.hourLabelText}>{formatTimeLabel(hour)}</Text>
         </View>
       ))}
@@ -192,7 +322,19 @@ function TimelineHours({ styles, showTimezone = true }) {
   );
 }
 
-function DayTimeline({ date, events, styles, onEventPress }) {
+function DayTimeline({
+  date,
+  events,
+  styles,
+  onEventPress,
+  onDeleteLearningItem,
+}) {
+  const positionedEvents = useMemo(() => buildPositionedEvents(events), [events]);
+  const hourHeight = useMemo(
+    () => getDynamicHourHeight(positionedEvents, DAY_COLUMN_WIDTH),
+    [positionedEvents]
+  );
+
   return (
     <View style={styles.timelineWrap}>
       <View style={styles.dayHeaderWrap}>
@@ -208,21 +350,23 @@ function DayTimeline({ date, events, styles, onEventPress }) {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.timelineBodyRow}>
-          <TimelineHours styles={styles} />
+          <TimelineHours styles={styles} hourHeight={hourHeight} />
 
           <View style={[styles.singleDayColumn, { width: DAY_COLUMN_WIDTH }]}>
             {HOURS.map((hour) => (
-              <View key={hour} style={styles.hourGridCell} />
+              <View key={hour} style={[styles.hourGridCell, { height: hourHeight }]} />
             ))}
 
-            {events.map((event, index) => (
+            {positionedEvents.map((event, index) => (
               <TimelineEvent
                 key={event.id}
                 event={event}
                 index={index}
                 styles={styles}
                 columnWidth={DAY_COLUMN_WIDTH}
+                hourHeight={hourHeight}
                 onPress={onEventPress}
+                onDeleteLearningItem={onDeleteLearningItem}
               />
             ))}
           </View>
@@ -239,10 +383,19 @@ function WeekTimeline({
   onSelectDate,
   styles,
   onEventPress,
+  onDeleteLearningItem,
 }) {
   const hoursScrollRef = useRef(null);
   const gridScrollRef = useRef(null);
   const syncingRef = useRef(null);
+  const weekAllEvents = useMemo(
+    () => dates.flatMap((date) => eventsByDate[formatDateKey(date)] || []),
+    [dates, eventsByDate]
+  );
+  const hourHeight = useMemo(
+    () => getDynamicHourHeight(weekAllEvents, WEEK_COLUMN_WIDTH),
+    [weekAllEvents]
+  );
 
   const syncScroll = (source, offsetY) => {
     if (syncingRef.current && syncingRef.current !== source) {
@@ -272,7 +425,7 @@ function WeekTimeline({
               syncScroll("hours", event.nativeEvent.contentOffset.y)
             }
           >
-            <TimelineHours styles={styles} showTimezone={false} />
+            <TimelineHours styles={styles} hourHeight={hourHeight} showTimezone={false} />
           </ScrollView>
         </View>
 
@@ -325,7 +478,7 @@ function WeekTimeline({
               <View style={styles.weekColumnsRow}>
                 {dates.map((date) => {
                   const key = formatDateKey(date);
-                  const events = eventsByDate[key] || [];
+                  const events = buildPositionedEvents(eventsByDate[key] || []);
 
                   return (
                     <View
@@ -333,7 +486,7 @@ function WeekTimeline({
                       style={[styles.weekTimelineColumn, { width: WEEK_COLUMN_WIDTH }]}
                     >
                       {HOURS.map((hour) => (
-                        <View key={hour} style={styles.hourGridCell} />
+                        <View key={hour} style={[styles.hourGridCell, { height: hourHeight }]} />
                       ))}
 
                       {events.map((event, index) => (
@@ -343,7 +496,9 @@ function WeekTimeline({
                           index={index}
                           styles={styles}
                           columnWidth={WEEK_COLUMN_WIDTH}
+                          hourHeight={hourHeight}
                           onPress={onEventPress}
+                          onDeleteLearningItem={onDeleteLearningItem}
                         />
                       ))}
                     </View>
@@ -358,7 +513,7 @@ function WeekTimeline({
   );
 }
 
-function ReviewList({ events, styles, onEventPress }) {
+function ReviewList({ events, styles, onEventPress, onDeleteLearningItem }) {
   return (
     <FlatList
       data={events}
@@ -367,22 +522,34 @@ function ReviewList({ events, styles, onEventPress }) {
         <Text style={styles.emptyText}>No review sessions in this range.</Text>
       }
       renderItem={({ item, index }) => (
-        <Pressable
-          onPress={() => onEventPress?.(item)}
+        <View
           style={[
             styles.reviewCard,
             index % 2 === 0 ? styles.reviewCardBlue : styles.reviewCardOrange,
           ]}
         >
-          <Text style={styles.reviewTitle}>{item.title}</Text>
-          <Text style={styles.reviewMeta}>{formatTimeRange(item.reviewTimeRange)}</Text>
-          <Text style={styles.reviewMeta}>
-            {item.type === "new-word"
-              ? `${item.words.length} word${item.words.length === 1 ? "" : "s"}`
-              : `Review day +${item.dayOffset}`}
-          </Text>
-          <Text style={styles.reviewMeta}>{formatHeaderDate(item.dateObj)}</Text>
-        </Pressable>
+          <Pressable onPress={() => onEventPress?.(item)}>
+            <Text style={styles.reviewTitle}>{item.title}</Text>
+            <Text style={styles.reviewMeta}>{formatTimeRange(item.reviewTimeRange)}</Text>
+            <Text style={styles.reviewMeta}>
+              {item.type === "new-word"
+                ? `${item.words.length} word${item.words.length === 1 ? "" : "s"}`
+                : `Review day +${item.dayOffset}`}
+            </Text>
+            <Text style={styles.reviewMeta}>{formatHeaderDate(item.dateObj)}</Text>
+          </Pressable>
+          {item.type === "learning" && (
+            <Pressable
+              onPress={() => onDeleteLearningItem?.(item.sourceItemId)}
+              style={({ pressed }) => [
+                styles.deleteButton,
+                pressed && styles.deleteButtonPressed,
+              ]}
+            >
+              <Text style={styles.deleteButtonText}>Delete</Text>
+            </Pressable>
+          )}
+        </View>
       )}
       contentContainerStyle={styles.listContent}
       style={styles.list}
@@ -410,6 +577,7 @@ export default function Schedule({
   navigation,
   learningItems,
   englishWords,
+  onDeleteLearningItem,
   isDark,
 }) {
   const [viewMode, setViewMode] = useState("month");
@@ -426,12 +594,19 @@ export default function Schedule({
         return;
       }
 
-      item.reviews.forEach((review, index) => {
+      const initialReview = {
+        dayOffset: 0,
+        date: normalizeDate(new Date(item.createdAt)).toISOString(),
+      };
+      const allReviews = [initialReview, ...(item.reviews || [])];
+
+      allReviews.forEach((review, index) => {
         const dateObj = normalizeDate(new Date(review.date));
         const dateKey = formatDateKey(dateObj);
 
         events.push({
           id: `${item.id}-${index}`,
+          sourceItemId: item.id,
           title: item.title,
           type: "learning",
           reviewTimeRange: item.reviewTimeRange || {
@@ -496,8 +671,15 @@ export default function Schedule({
       });
 
       const baseReviews = sortedWords[0]?.reviews || [];
+      const allReviews = [
+        {
+          dayOffset: 0,
+          date: group.sourceDateObj.toISOString(),
+        },
+        ...baseReviews,
+      ];
 
-      return baseReviews.map((review) => {
+      return allReviews.map((review) => {
         const dateObj = normalizeDate(new Date(review.date));
         const dateKey = formatDateKey(dateObj);
 
@@ -584,6 +766,21 @@ export default function Schedule({
   );
 
   const monthCells = useMemo(() => buildMonthCells(monthAnchor), [monthAnchor]);
+
+  const confirmDeleteLearningItem = (itemId) => {
+    Alert.alert(
+      "Delete learning",
+      "Are you sure you want to delete this learning item?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => onDeleteLearningItem?.(itemId),
+        },
+      ]
+    );
+  };
 
   const handleEventPress = (event) => {
     if (event.type === "new-word") {
@@ -679,6 +876,7 @@ export default function Schedule({
           events={dayEvents}
           styles={styles}
           onEventPress={handleEventPress}
+          onDeleteLearningItem={confirmDeleteLearningItem}
         />
       )}
 
@@ -690,6 +888,7 @@ export default function Schedule({
           onSelectDate={setSelectedDate}
           styles={styles}
           onEventPress={handleEventPress}
+          onDeleteLearningItem={confirmDeleteLearningItem}
         />
       )}
 
@@ -736,6 +935,7 @@ export default function Schedule({
             events={dayEvents}
             styles={styles}
             onEventPress={handleEventPress}
+            onDeleteLearningItem={confirmDeleteLearningItem}
           />
         </View>
       )}
@@ -746,6 +946,7 @@ export default function Schedule({
             events={weekEvents}
             styles={styles}
             onEventPress={handleEventPress}
+            onDeleteLearningItem={confirmDeleteLearningItem}
           />
         </View>
       )}
@@ -881,7 +1082,6 @@ function createStyles(colors) {
       backgroundColor: colors.panel,
     },
     timezoneLabel: {
-      height: HOUR_HEIGHT,
       textAlign: "center",
       textAlignVertical: "center",
       color: colors.text,
@@ -892,7 +1092,6 @@ function createStyles(colors) {
       borderColor: colors.timelineLine,
     },
     hourLabelCell: {
-      height: HOUR_HEIGHT,
       justifyContent: "flex-start",
       alignItems: "center",
       paddingTop: 6,
@@ -938,7 +1137,6 @@ function createStyles(colors) {
       borderColor: colors.timelineLine,
     },
     hourGridCell: {
-      height: HOUR_HEIGHT,
       borderBottomWidth: 1,
       borderColor: colors.timelineLine,
     },
@@ -1002,6 +1200,24 @@ function createStyles(colors) {
       paddingHorizontal: 8,
       paddingVertical: 6,
       overflow: "hidden",
+      justifyContent: "center",
+    },
+    timelineDeleteButton: {
+      position: "absolute",
+      top: 6,
+      right: 6,
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: "rgba(255,255,255,0.18)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    timelineDeleteButtonPressed: {
+      opacity: 0.85,
+    },
+    timelineDeleteIcon: {
+      fontSize: 10,
     },
     timelineEventBlue: {
       backgroundColor: colors.eventBlue,
@@ -1139,6 +1355,22 @@ function createStyles(colors) {
       paddingVertical: 12,
       borderWidth: 1,
       borderColor: colors.border,
+    },
+    deleteButton: {
+      marginTop: 10,
+      alignSelf: "flex-start",
+      backgroundColor: "#d64545",
+      borderRadius: 999,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+    },
+    deleteButtonPressed: {
+      opacity: 0.9,
+    },
+    deleteButtonText: {
+      color: "#fff",
+      fontWeight: "800",
+      fontSize: 12,
     },
   });
 }

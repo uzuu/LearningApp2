@@ -1,19 +1,23 @@
-﻿import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DarkTheme,
   DefaultTheme,
   NavigationContainer,
 } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { StatusBar } from "expo-status-bar";
 import { Pressable, StyleSheet, Text, useColorScheme } from "react-native";
 import NewEnglishWord from "./components/NewEnglishWord";
 import NewLearning from "./components/NewLearning";
 import Newword from "./components/Newword";
+import NewWordTest from "./components/NewWordTest";
 import Schedule from "./components/Schedule";
 
 const Stack = createNativeStackNavigator();
 const REVIEW_INTERVALS = [1, 2, 4, 8, 16, 32, 64, 128];
+const LEARNING_STORAGE_KEY = "learningItems";
+const ENGLISH_WORD_STORAGE_KEY = "englishWords";
 
 function normalizeDate(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -28,6 +32,7 @@ function addDays(date, days) {
 export default function App() {
   const [learningItems, setLearningItems] = useState([]);
   const [englishWords, setEnglishWords] = useState([]);
+  const hasLoadedStorage = useRef(false);
   const colorScheme = useColorScheme();
   const [themeMode, setThemeMode] = useState(
     colorScheme === "dark" ? "dark" : "light"
@@ -52,6 +57,56 @@ export default function App() {
   const toggleTheme = () => {
     setThemeMode((prev) => (prev === "dark" ? "light" : "dark"));
   };
+
+  useEffect(() => {
+    const loadStoredData = async () => {
+      try {
+        const [storedLearningItems, storedEnglishWords] = await Promise.all([
+          AsyncStorage.getItem(LEARNING_STORAGE_KEY),
+          AsyncStorage.getItem(ENGLISH_WORD_STORAGE_KEY),
+        ]);
+
+        if (storedLearningItems) {
+          setLearningItems(JSON.parse(storedLearningItems));
+        }
+
+        if (storedEnglishWords) {
+          setEnglishWords(JSON.parse(storedEnglishWords));
+        }
+      } catch (error) {
+        console.warn("Failed to load stored data.", error);
+      } finally {
+        hasLoadedStorage.current = true;
+      }
+    };
+
+    loadStoredData();
+  }, []);
+
+  useEffect(() => {
+    if (!hasLoadedStorage.current) {
+      return;
+    }
+
+    AsyncStorage.setItem(LEARNING_STORAGE_KEY, JSON.stringify(learningItems)).catch(
+      (error) => {
+        console.warn("Failed to save learning items.", error);
+      }
+    );
+  }, [learningItems]);
+
+  useEffect(() => {
+    if (!hasLoadedStorage.current) {
+      return;
+    }
+
+    AsyncStorage.setItem(
+      ENGLISH_WORD_STORAGE_KEY,
+      JSON.stringify(englishWords)
+    ).catch((error) => {
+      console.warn("Failed to save english words.", error);
+    });
+  }, [englishWords]);
 
   const addLearningItem = ({
     title,
@@ -119,6 +174,15 @@ export default function App() {
       return false;
     }
 
+    const normalizedTitle = cleanedTitle.toLowerCase();
+    const alreadyExists = englishWords.some(
+      (word) => word.title.trim().toLowerCase() === normalizedTitle
+    );
+
+    if (alreadyExists) {
+      return false;
+    }
+
     const baseDate = normalizeDate(new Date());
     const reviews = REVIEW_INTERVALS.map((days) => ({
       dayOffset: days,
@@ -136,6 +200,14 @@ export default function App() {
 
     setEnglishWords((prev) => [...prev, newWord]);
     return true;
+  };
+
+  const deleteLearningItem = (itemId) => {
+    setLearningItems((prev) => prev.filter((item) => item.id !== itemId));
+  };
+
+  const deleteEnglishWord = (wordId) => {
+    setEnglishWords((prev) => prev.filter((word) => word.id !== wordId));
   };
 
   return (
@@ -161,6 +233,7 @@ export default function App() {
               {...props}
               learningItems={learningItems}
               englishWords={englishWords}
+              onDeleteLearningItem={deleteLearningItem}
               isDark={isDark}
             />
           )}
@@ -190,7 +263,16 @@ export default function App() {
           )}
         </Stack.Screen>
         <Stack.Screen name="Newword" options={{ title: "New Word" }}>
-          {(props) => <Newword {...props} isDark={isDark} />}
+          {(props) => (
+            <Newword
+              {...props}
+              onDeleteEnglishWord={deleteEnglishWord}
+              isDark={isDark}
+            />
+          )}
+        </Stack.Screen>
+        <Stack.Screen name="NewWordTest" options={{ title: "New Word Test" }}>
+          {(props) => <NewWordTest {...props} isDark={isDark} />}
         </Stack.Screen>
       </Stack.Navigator>
     </NavigationContainer>
